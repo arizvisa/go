@@ -2728,14 +2728,27 @@ func (gccgoToolchain) Pkgpath(basedir string, p *load.Package) string {
 }
 
 func (gccgoToolchain) pack(b *Builder, p *load.Package, objDir, afile string, ofiles []string) error {
+	var ok bool
+
 	var absOfiles []string
 	for _, f := range ofiles {
 		absOfiles = append(absOfiles, mkAbs(objDir, f))
 	}
-	return b.run(p.Dir, p.ImportPath, nil, "ar", "rc", mkAbs(objDir, afile), absOfiles)
+
+	var AR, RC string
+	if AR, ok = os.LookupEnv("AR"); !ok {
+		AR = "ar"
+	}
+	if RC, ok = os.LookupEnv("RC"); !ok {
+		RC = "rc"
+	}
+
+	return b.run(p.Dir, p.ImportPath, nil, AR, RC, mkAbs(objDir, afile), absOfiles)
 }
 
 func (tools gccgoToolchain) link(b *Builder, root *Action, out string, allactions []*Action, mainpkg string, ofiles []string, buildmode, desc string) error {
+	var ok bool
+
 	// gccgo needs explicit linking with all package dependencies,
 	// and all LDFLAGS from cgo dependencies.
 	apackagePathsSeen := make(map[string]bool)
@@ -2751,6 +2764,15 @@ func (tools gccgoToolchain) link(b *Builder, root *Action, out string, allaction
 		cxx = len(root.Package.CXXFiles) > 0 || len(root.Package.SwigCXXFiles) > 0
 		objc = len(root.Package.MFiles) > 0
 		fortran = len(root.Package.FFiles) > 0
+	}
+
+	var AR, RC string
+	if AR, ok = os.LookupEnv("AR"); !ok {
+		AR = "ar"
+	}
+
+	if RC, ok = os.LookupEnv("RC"); !ok {
+		RC = "rc"
 	}
 
 	readCgoFlags := func(flagsFile string) error {
@@ -2798,11 +2820,11 @@ func (tools gccgoToolchain) link(b *Builder, root *Action, out string, allaction
 		}
 
 		newarchive := newa.Name()
-		err = b.run(b.WorkDir, desc, nil, "ar", "x", newarchive, "_cgo_flags")
+		err = b.run(b.WorkDir, desc, nil, AR, "x", newarchive, "_cgo_flags")
 		if err != nil {
 			return "", err
 		}
-		err = b.run(".", desc, nil, "ar", "d", newarchive, "_cgo_flags")
+		err = b.run(".", desc, nil, AR, "d", newarchive, "_cgo_flags")
 		if err != nil {
 			return "", err
 		}
@@ -2994,7 +3016,7 @@ func (tools gccgoToolchain) link(b *Builder, root *Action, out string, allaction
 
 	switch buildmode {
 	case "c-archive":
-		if err := b.run(".", desc, nil, "ar", "rc", realOut, out); err != nil {
+		if err := b.run(".", desc, nil, AR, RC, realOut, out); err != nil {
 			return err
 		}
 	}
