@@ -21,6 +21,11 @@ package cgo
 #cgo netbsd LDFLAGS: -lpthread
 #cgo openbsd LDFLAGS: -lpthread
 
+#cgo windows,386 CFLAGS: -target i686-w64-mingw32
+#cgo windows,386 LDFLAGS: -target i686-w64-mingw32
+#cgo windows,amd64 CFLAGS: -target x86_64-w64-mingw64
+#cgo windows,amd64 LDFLAGS: -target x86_64-w64-mingw64
+
 #cgo CFLAGS: -Wall -Werror
 
 #cgo solaris CPPFLAGS: -D_POSIX_PTHREAD_SEMANTICS
