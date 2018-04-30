@@ -25,6 +25,8 @@ func checkGdbEnvironment(t *testing.T) {
 	switch runtime.GOOS {
 	case "darwin":
 		t.Skip("gdb does not work on darwin")
+	case "windows":
+		t.Skip("gdb does not work on windows")
 	case "netbsd":
 		t.Skip("gdb does not work with threads on NetBSD; see golang.org/issue/22893 and gnats.netbsd.org/52548")
 	case "linux":
