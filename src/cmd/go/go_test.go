@@ -248,6 +248,25 @@ func testgo(t *testing.T) *testgoData {
 	return &testgoData{t: t}
 }
 
+func (tg *testgoData) checkCgo() {
+	var cgo string
+
+	// grab the environment variable
+	cgo = os.Getenv("CGO_ENABLED")
+	if cgo == "" {
+		tg.t.Skipf("Skipping CGO-related test due to CGO_ENABLED being undefined.")
+	}
+
+	// check to see if the environment variable is parseable
+	if val, err := strconv.ParseUint(cgo, 10, 64); err != nil || (err == nil && val == 0) {
+		if err == nil {
+			tg.t.Skipf("Skipping CGO-related test due to CGO_ENABLED being set to %d.", val)
+		} else {
+			tg.t.Skipf("Skipping CGO-related test due to CGO_ENABLED being unparseable. (%#v)", err)
+		}
+	}
+}
+
 // must gives a fatal error if err is not nil.
 func (tg *testgoData) must(err error) {
 	tg.t.Helper()
@@ -3236,6 +3255,7 @@ func TestGoVetWithOnlyTestFiles(t *testing.T) {
 // Issue 24193.
 func TestVetWithOnlyCgoFiles(t *testing.T) {
 	tg := testgo(t)
+	tg.checkCgo()
 	defer tg.cleanup()
 	tg.parallel()
 	tg.tempFile("src/p/p.go", "package p; import \"C\"; func F() {}")
