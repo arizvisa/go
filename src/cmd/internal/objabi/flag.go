@@ -7,6 +7,8 @@ package objabi
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -27,8 +29,139 @@ func Flagprint(fd int) {
 	flag.PrintDefaults()
 }
 
+// This is a near exact copy of gcc's libiberty/argv.c buildargv
+func buildargv(data []byte) []string {
+	var result []string
+
+	// current index into data
+	var di int
+
+	// string parsing states
+	var squote, dquote, bsquote bool
+
+	// simple check if a char is whitespace
+	ISSPACE := func(ch byte) bool {
+		return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\v' || ch == '\f' || ch == '\r'
+	}
+
+	// simple consume_whitespace implementation
+	consume_whitespace := func(idx int, data []byte) int {
+		for i := idx; i < len(data); i++ {
+			if !ISSPACE(data[i]) {
+				return i
+			}
+		}
+		return len(data)
+	}
+
+	// consume initial whitespace
+	di = consume_whitespace(0, data)
+	if di >= len(data) {
+		return result
+	}
+
+	// argument loop
+	for di < len(data) {
+		var arg string
+
+		// scan each individual argument
+		arg = ""
+		for di < len(data) {
+			if ISSPACE(data[di]) && !squote && !dquote && !bsquote {
+				break
+			}
+
+			// backslash
+			if bsquote {
+				bsquote = false
+				arg += string(data[di])
+			} else if data[di] == '\\' {
+				bsquote = true
+
+			// single-quote
+			} else if squote {
+				if data[di] == '\'' {
+					squote = false
+				} else {
+					arg += string(data[di])
+				}
+
+			// double-quote
+			} else if dquote {
+				if data[di] == '"' {
+					dquote = false
+				} else {
+					arg += string(data[di])
+				}
+
+			// state entries
+			} else {
+				if data[di] == '\'' {
+					squote = true
+				} else if data[di] == '"' {
+					dquote = true
+				} else {
+					arg += string(data[di])
+				}
+			}
+
+			// process the next byte
+			di += 1
+		}
+
+		// add the current arg to the results
+		result = append(result, arg)
+		di = consume_whitespace(di, data)
+	}
+
+	// ...and we're done!
+	return result
+}
+
 func Flagparse(usage func()) {
 	flag.Usage = usage
+
+	// Expand any response files that were specified at the commandline. Anything
+	// that is not a response file (file not found, zero-length arg, etc) gets
+	// blindly added to the arg as we assume that the user knows what they're doing.
+
+	// FIXME: I think response files are recursive, so if that's true then this
+	// 		  code should be refactored to support recursive response files. Probably
+	//		  with a channel or something.
+	var args []string
+	for _, arg := range os.Args {
+		// Check that response file prefix doesn't exist or that arg is zero-length
+		if !strings.HasPrefix(arg, "@") || len(arg) < 1 {
+			args = append(args, arg)
+			continue
+		}
+
+		// Check to see if the @-prefixed file is non-existent
+		file, err := os.Open(arg[1:])
+		if os.IsNotExist(err) {
+			log.Printf("Unable to open response file (%s): %#v\n", arg[1:], err)
+			args = append(args, arg)
+			continue
+		}
+
+		// Okay, so now we have a file with args. So expand the file contents
+		contents, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Fatalf("Unable to read contents of response file (%s): %#v", arg[1:], err)
+		}
+
+		// Now we can add each arg from the file
+		for _, row := range buildargv(contents) {
+			args = append(args, row)
+		}
+
+		// We're done. Close it and move on
+		if err := file.Close(); err != nil {
+			log.Fatalf("Unable to close response file (%s): %#v", arg[1:], err)
+		}
+	}
+
+	os.Args = args
 	flag.Parse()
 }
 
