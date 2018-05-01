@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"bufio"
 	"log"
 	"os"
 	"os/exec"
@@ -1508,7 +1509,26 @@ func (b *Builder) runOut(dir string, desc string, env []string, cmdargs ...inter
 	}
 
 	var buf bytes.Buffer
-	cmd := exec.Command(cmdline[0], cmdline[1:]...)
+
+	// Execute the requested cmdline. If we're on windows and the size of the
+	// cmdline is larger than the windows limitation, then write the arguments
+	// into a response file and use that.
+	response, cmd := buildLongCommand(cmdline)
+
+	// if a response file was returned, then make sure to remove it after usage
+	if response != nil {
+		defer func(file *os.File) {
+			filename := file.Name()
+			if err := response.Close(); err != nil {
+				log.Fatalf("Unable to close response file (%s): %#v", filename, err)
+			}
+			if err := os.Remove(filename); err != nil {
+				log.Fatalf("Unable to remove response file (%s): %#v", filename, err)
+			}
+		}(response)
+	}
+
+	// Continue populating the *exec.Cmd structure
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	cmd.Dir = dir
@@ -2427,4 +2447,85 @@ func mkAbsFiles(dir string, files []string) []string {
 		abs[i] = f
 	}
 	return abs
+}
+
+// Escape all the specified chars in the input string using a backslash.
+func escapeString(input, characters string) string {
+	var result string
+	const escape = `\`
+
+	// Iterate through the input string looking for any chars that match
+	for _, char := range input {
+		// If a specified char was found (or the escape char), then prefix it.
+		if strings.Contains(characters + escape, string(char)) {
+			result += escape
+		}
+
+		// Now we can append the next character
+		result += string(char)
+	}
+
+	// ...and now we should be good to go!
+	return result
+}
+
+// buildLongCommand returns a response os.File and an os/exec.Cmd if we're on windows
+// and the cmdline is larger than the limitation of UNICODE_STRING (0x8000)
+//
+// See Issue 18468.
+func buildLongCommand(cmdline []string) (*os.File, *exec.Cmd) {
+	const MAX_UNICODE_STRING = 0x7fff
+	const IFS = "\n"
+
+	const response_file_prefix = "resp-"
+
+	// Sum up the total number of bytes occupied by the commandline
+	var argLen int
+	for _, arg := range cmdline {
+		argLen += len(arg)
+		argLen += len(" ")	// command line arg separator
+	}
+
+	// Check if we're not running windows, if there's no commandline arguments,
+	// or if there's no need to use a response file because we're under the limit.
+	if runtime.GOOS != "windows" || len(cmdline) <= 1 || argLen < MAX_UNICODE_STRING {
+		//log.Printf("Executing command (%s) normally (%d < %d).", cmdline[0], argLen, MAX_UNICODE_STRING)
+		return nil, exec.Command(cmdline[0], cmdline[1:]...)
+	}
+	//log.Printf("Executing command (%s) with response file (%d >= %d).", cmdline[0], argLen, MAX_UNICODE_STRING)
+
+	// Create a temporary response file containing the old commandline arguments
+	file, err := ioutil.TempFile("", response_file_prefix)
+	if err != nil {
+		log.Fatalf("Unable to open up a temporary file to insert response parameters: %#v", err)
+	}
+
+	// Populate temporary file with contents of cmdline[1:]
+	f := bufio.NewWriter(file)
+	for ai, arg := range cmdline[1:] {
+		var row string
+
+		// FIXME: Figure out what the proper way to quote args in a response file are..
+
+		// If it's not already quoted, then double-quote and escape it
+		if !strings.HasPrefix(arg, `"`) && !strings.HasSuffix(arg, `"`) {
+			row = fmt.Sprintf(`"%s"`, escapeString(arg, `\"`))
+
+		// Otherwise we can just add it as-is since the user has already quoted it
+		} else {
+			row = arg
+		}
+
+		// Write it to the response file separated by IFS
+		if _, err := fmt.Fprintf(f, `%s%s`, row, IFS); err != nil {
+			log.Fatalf("Unable to write cmdline[%d] to response file (%s): %#v", ai, file.Name(), err)
+		}
+	}
+
+	// Flush everything written to the response file
+	if err := f.Flush(); err != nil {
+		log.Fatalf("Unable to flush output to response file (%s): %#v", file.Name(), err)
+	}
+
+	return file, exec.Command(cmdline[0], "@" + file.Name())
 }
